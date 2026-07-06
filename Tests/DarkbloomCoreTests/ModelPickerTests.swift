@@ -27,6 +27,46 @@ final class CatalogDecodeTests: XCTestCase {
         """.data(using: .utf8)!
         XCTAssertEqual(try CoordinatorAPI.decodeCatalog(json).map(\.id), ["ok"])
     }
+
+    func testPickerModelsPreferGemmaQAT4Bit() {
+        let models: [CoordinatorAPI.CatalogModel] = [
+            .init(id: "gpt-oss-20b", displayName: "GPT-OSS 20B",
+                  minRamGB: 24, sizeGB: 12.1, active: true),
+            .init(id: "gemma-4-26b", displayName: "Gemma 4 26B",
+                  minRamGB: 36, sizeGB: 28.0, active: true),
+            .init(id: "gemma-4-26b-qat-4bit", displayName: "Gemma 4 26B",
+                  minRamGB: 36, sizeGB: 15.6, active: true),
+            .init(id: "gemma-4-26b-8bit", displayName: "Gemma 4 26B 8-bit (rollback)",
+                  minRamGB: 64, sizeGB: 28.0, active: true)
+        ]
+
+        let pickerModels = ModelCatalog.pickerModels(models)
+
+        XCTAssertEqual(pickerModels.map(\.id), ["gpt-oss-20b", "gemma-4-26b-qat-4bit"])
+        XCTAssertEqual(pickerModels[1].displayName, "Gemma 4 26B 4-bit")
+    }
+
+    func testPickerModelsKeepLegacyGemmaWhenQAT4BitIsUnavailable() {
+        let models: [CoordinatorAPI.CatalogModel] = [
+            .init(id: "gemma-4-26b", displayName: "Gemma 4 26B",
+                  minRamGB: 36, sizeGB: 28.0, active: true)
+        ]
+
+        XCTAssertEqual(ModelCatalog.pickerModels(models).map(\.id), ["gemma-4-26b"])
+    }
+
+    func testCanonicalizesLegacyGemmaSelectionToQAT4Bit() {
+        let availableIDs: Set<String> = ["gpt-oss-20b", "gemma-4-26b-qat-4bit"]
+
+        XCTAssertEqual(
+            ModelCatalog.canonicalModelIDs(["gpt-oss-20b", "gemma-4-26b"], availableIDs: availableIDs),
+            ["gpt-oss-20b", "gemma-4-26b-qat-4bit"]
+        )
+        XCTAssertEqual(
+            ModelCatalog.canonicalModelID("gemma-4-26b-8bit", availableIDs: availableIDs),
+            "gemma-4-26b-qat-4bit"
+        )
+    }
 }
 
 final class LaunchAgentPlistTests: XCTestCase {

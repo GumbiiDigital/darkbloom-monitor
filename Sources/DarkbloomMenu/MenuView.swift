@@ -738,12 +738,20 @@ struct MenuView: View {
     }
 
     private var pickerModels: [CoordinatorAPI.CatalogModel] {
-        var models = state.catalog
+        var models = ModelCatalog.pickerModels(state.catalog)
         let known = Set(models.map(\.id))
-        for id in state.currentModels where !known.contains(id) {
+        for id in currentPickerSelection where !known.contains(id) {
             models.append(.init(id: id, displayName: id, minRamGB: nil, sizeGB: nil, active: true))
         }
         return models
+    }
+
+    private var currentPickerSelection: Set<String> {
+        ModelCatalog.canonicalModelIDs(state.currentModels, availableIDs: pickerAvailableIDs)
+    }
+
+    private var pickerAvailableIDs: Set<String> {
+        Set(state.catalog.map(\.id)).union(state.downloadedModels)
     }
 
     private var modelPicker: some View {
@@ -876,15 +884,16 @@ struct MenuView: View {
     private func openServingPicker(_ intent: ServingPickerIntent) {
         state.refreshModelSelection()
         pickerIntent = intent
-        let initialSelection = Set(state.currentModels)
+        let initialSelection = currentPickerSelection
         selectedModels = initialSelection
         withAnimation(.easeOut(duration: 0.18)) {
             pickerOpen = true
         }
         Task {
             await state.refreshCatalog()
+            let refreshedSelection = currentPickerSelection
             if pickerOpen, pickerIntent == intent, selectedModels == initialSelection {
-                selectedModels = Set(state.currentModels)
+                selectedModels = refreshedSelection
             }
         }
     }
