@@ -162,6 +162,33 @@ final class FleetAnalyticsTests: XCTestCase {
         XCTAssertEqual(result.snapshot.rows[1].metrics, FleetMetrics())
     }
 
+    func testDefaultRosterContainsSixSerialKeyedBoxes() {
+        XCTAssertEqual(FleetRosterDefaults.entries.count, 6)
+        XCTAssertEqual(Set(FleetRosterDefaults.entries.map(\.serialNumber)).count, 6)
+        XCTAssertEqual(Set(FleetRosterDefaults.entries.map(\.name)), ["WV0", "G2YF", "HDCF", "KDQ", "DRXY", "M5"])
+    }
+
+    func testRollingPeriodFiltersJobsWithoutChangingRoster() {
+        let roster = [FleetRosterEntry(name: "A", serialNumber: "A")]
+        let entries = [
+            earning(1, providerID: "p-a", ago: 30 * 60, input: 1, output: 2),
+            earning(2, providerID: "p-a", ago: 2 * 3_600, input: 3, output: 4),
+        ]
+        let history = FleetIdentityHistory(providerToSerial: ["p-a": "A"])
+        let hour = FleetAnalytics.snapshot(
+            roster: roster, connected: [], earnings: account(entries), identityHistory: history,
+            period: .hour, now: now).snapshot
+        let day = FleetAnalytics.snapshot(
+            roster: roster, connected: [], earnings: account(entries), identityHistory: history,
+            period: .day, now: now).snapshot
+
+        XCTAssertEqual(hour.rows.count, 1)
+        XCTAssertEqual(hour.totals.jobs, 1)
+        XCTAssertEqual(hour.totals.outputTokens, 2)
+        XCTAssertEqual(day.totals.jobs, 2)
+        XCTAssertEqual(day.totals.outputTokens, 6)
+    }
+
     func testPreviouslySeenBoxBecomesOfflineWithoutBeingRemoved() {
         let roster = [FleetRosterEntry(name: "A", serialNumber: "A")]
         let first = FleetAnalytics.snapshot(
