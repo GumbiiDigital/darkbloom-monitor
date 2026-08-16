@@ -32,8 +32,9 @@ Click it for the rest:
   session, GPU memory, uptime, and trust level
 - 🌡️ **Hardware metrics** — memory use, fan speed, and CPU / GPU temperatures
 - 📊 **Jobs chart** — paid inference jobs per hour over the last 24 hours
-- 💻 **My Macs** — appears when more than one of your machines is online,
-  with the models each is serving
+- 💻 **Fleet** — a persistent serial-keyed roster of every configured Mac,
+  including offline and zero-traffic machines, with 1h / 24h / 7d / lifetime
+  input tokens, output tokens, jobs, earnings, model, trust, and last activity
 - ⏯️ **Start / Stop / Restart** — control the provider without opening a
   terminal
 
@@ -63,7 +64,8 @@ the same data the CLI does:
 |------|--------|---------|
 | Provider status | `~/.darkbloom/daemon-state.json` + pid liveness probe — the same staleness rule `darkbloom status` uses | every 3s |
 | Earnings & balance | `GET api.darkbloom.dev/v1/provider/account-earnings`, authenticated with the CLI's device token | every 30s |
-| Fleet | public `GET /v1/providers/attestation`, filtered to machines verifiably yours | every 30s |
+| Fleet status | public `GET /v1/providers/attestation`, matched to the local hardware-serial roster | every 30s |
+| Fleet traffic | account earnings grouped by persisted provider-ID → serial mappings | every 30s |
 | Start / Stop / Restart | shells out to the `darkbloom` CLI, which drives the `io.darkbloom.provider` LaunchAgent | on click |
 
 Measured footprint: 0.0% CPU, power impact 0.0 — the provider it watches
@@ -73,6 +75,14 @@ A few hard-won details live in [AGENTS.md](AGENTS.md), including why
 machines are identified by hardware serial (both `provider_id` and
 `provider_key` rotate every restart) and why the app replays `--model`
 flags from the LaunchAgent plist when starting.
+
+### Fleet roster
+
+The default roster contains six machines: WV0, G2YF, HDCF, KDQ, DRXY, and M5.
+Open Settings → Fleet to rename entries, remove a machine, or add another
+hardware serial. Unknown jobs remain in an explicit **Unattributed** row. The
+monitor does not start, stop, restart, warm, or control a remote provider;
+fleet data is read-only.
 
 ## Development
 

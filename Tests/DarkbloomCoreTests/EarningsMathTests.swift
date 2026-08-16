@@ -111,6 +111,140 @@ final class FleetTests: XCTestCase {
     }
 }
 
+final class FleetAnalyticsTests: XCTestCase {
+    let now = Date(timeIntervalSince1970: 1_781_280_000)
+
+    func provider(_ id: String, serial: String, status: String = "serving") -> CoordinatorAPI.AttestedProvider {
+        CoordinatorAPI.AttestedProvider(
+            providerID: id, chipName: "Apple M3 Ultra", hardwareModel: "Mac14,15",
+            serialNumber: serial, trustLevel: "hardware", status: status,
+            memoryGB: 256, gpuCores: 80, models: ["gemma-4-26b-qat-4bit"], mdmVerified: true)
+    }
+
+    func earning(
+        _ id: Int64,
+        providerID: String,
+        ago: TimeInterval,
+        input: Int,
+        output: Int,
+        amount: Int64 = 10
+    ) -> CoordinatorAPI.Earning {
+        CoordinatorAPI.Earning(
+            id: id, providerID: providerID, providerKey: "key-\(id)", model: "gemma",
+            amountMicroUSD: amount, promptTokens: input, completionTokens: output,
+            createdAt: now.addingTimeInterval(-ago))
+    }
+
+    func account(_ earnings: [CoordinatorAPI.Earning], total: Int64? = nil) -> CoordinatorAPI.AccountEarnings {
+        var account = try! CoordinatorAPI.decodeAccountEarnings(Data("{\"account_id\":\"a\",\"earnings\":[],\"total_micro_usd\":0,\"count\":0,\"available_balance_micro_usd\":0,\"withdrawable_balance_micro_usd\":0}".utf8))
+        account.earnings = earnings
+        account.totalMicroUSD = total ?? earnings.reduce(0) { $0 + $1.amountMicroUSD }
+        account.count = Int64(earnings.count)
+        return account
+    }
+
+    func testRosterKeepsOfflineAndZeroTrafficBoxesVisible() {
+        let roster = [
+            FleetRosterEntry(name: "A", serialNumber: "A"),
+            FleetRosterEntry(name: "B", serialNumber: "B"),
+        ]
+        let result = FleetAnalytics.snapshot(
+            roster: roster,
+            connected: [provider("p-a", serial: "A")],
+            earnings: account([]),
+            identityHistory: FleetIdentityHistory(),
+            period: .day,
+            now: now)
+
+        XCTAssertEqual(result.snapshot.rows.map(\.roster.name), ["A", "B"])
+        XCTAssertEqual(result.snapshot.rows[0].status, .online)
+        XCTAssertEqual(result.snapshot.rows[1].status, .neverSeen)
+        XCTAssertEqual(result.snapshot.rows[1].metrics, FleetMetrics())
+    }
+
+    func testPreviouslySeenBoxBecomesOfflineWithoutBeingRemoved() {
+        let roster = [FleetRosterEntry(name: "A", serialNumber: "A")]
+        let first = FleetAnalytics.snapshot(
+            roster: roster,
+            connected: [provider("p-a", serial: "A")],
+            earnings: account([]),
+            identityHistory: FleetIdentityHistory(),
+            period: .day,
+            now: now)
+        let second = FleetAnalytics.snapshot(
+            roster: roster,
+            connected: [],
+            earnings: account([]),
+            identityHistory: first.identityHistory,
+            period: .day,
+            now: now)
+
+        XCTAssertEqual(second.snapshot.rows.count, 1)
+        XCTAssertEqual(second.snapshot.rows[0].status, .offline)
+    }
+
+    func testProviderIDRotationUsesPersistedSerialMapping() {
+        let roster = [FleetRosterEntry(name: "A", serialNumber: "A")]
+        let first = FleetAnalytics.snapshot(
+            roster: roster,
+            connected: [provider("old", serial: "A")],
+            earnings: account([earning(1, providerID: "old", ago: 60, input: 2, output: 3)]),
+            identityHistory: FleetIdentityHistory(),
+            period: .day,
+            now: now)
+        let second = FleetAnalytics.snapshot(
+            roster: roster,
+            connected: [provider("new", serial: "A")],
+            earnings: account([
+                earning(1, providerID: "old", ago: 60, input: 2, output: 3),
+                earning(2, providerID: "new", ago: 30, input: 5, output: 7),
+            ]),
+            identityHistory: first.identityHistory,
+            period: .day,
+            now: now)
+
+        XCTAssertEqual(second.snapshot.rows[0].metrics.inputTokens, 7)
+        XCTAssertEqual(second.snapshot.rows[0].metrics.outputTokens, 10)
+        XCTAssertEqual(second.snapshot.rows[0].metrics.jobs, 2)
+    }
+
+    func testFleetReconciliationKeepsUnknownJobsExplicit() {
+        let roster = [FleetRosterEntry(name: "A", serialNumber: "A")]
+        let result = FleetAnalytics.snapshot(
+            roster: roster,
+            connected: [provider("known", serial: "A")],
+            earnings: account([
+                earning(1, providerID: "known", ago: 60, input: 1, output: 2, amount: 11),
+                earning(2, providerID: "unknown", ago: 30, input: 3, output: 4, amount: 13),
+            ]),
+            identityHistory: FleetIdentityHistory(),
+            period: .day,
+            now: now)
+
+        XCTAssertEqual(result.snapshot.totals.jobs, 2)
+        XCTAssertEqual(result.snapshot.totals.inputTokens, 4)
+        XCTAssertEqual(result.snapshot.totals.outputTokens, 6)
+        XCTAssertEqual(result.snapshot.totals.earningsMicroUSD, 24)
+        XCTAssertEqual(result.snapshot.unattributed.jobs, 1)
+        XCTAssertEqual(result.snapshot.unattributed.earningsMicroUSD, 13)
+    }
+
+    func testLifetimeGapIsNotAssignedToABox() {
+        let roster = [FleetRosterEntry(name: "A", serialNumber: "A")]
+        let result = FleetAnalytics.snapshot(
+            roster: roster,
+            connected: [provider("known", serial: "A")],
+            earnings: account([earning(1, providerID: "known", ago: 60, input: 1, output: 2, amount: 11)], total: 99),
+            identityHistory: FleetIdentityHistory(),
+            period: .lifetime,
+            now: now)
+
+        XCTAssertEqual(result.snapshot.rows[0].metrics.earningsMicroUSD, 11)
+        XCTAssertEqual(result.snapshot.unattributed.earningsMicroUSD, 88)
+        XCTAssertEqual(result.snapshot.totals.earningsMicroUSD, 99)
+    }
+}
+
 final class FmtTests: XCTestCase {
     func testUSDScalesPrecision() {
         XCTAssertEqual(Fmt.usd(21_949), "$0.0219")

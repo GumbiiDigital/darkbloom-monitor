@@ -1,3 +1,4 @@
+import DarkbloomCore
 import DarkbloomMenuSupport
 import SwiftUI
 
@@ -5,6 +6,8 @@ struct SettingsView: View {
     @ObservedObject var preferences: MenuPreferencesStore
     @ObservedObject var state: AppState
     @State private var selectedTab: SettingsTab = .menu
+    @State private var newFleetName = ""
+    @State private var newFleetSerial = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -15,10 +18,12 @@ struct SettingsView: View {
                 menuLayout
             case .serving:
                 serving
+            case .fleet:
+                fleet
             }
         }
         .padding(20)
-        .frame(minWidth: 590, idealWidth: 640, minHeight: 460, idealHeight: 500)
+        .frame(minWidth: 590, idealWidth: 640, minHeight: 460, idealHeight: 560)
     }
 
     private var tabSwitcher: some View {
@@ -201,6 +206,68 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
+    private var fleet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("These entries use hardware serials, so a box stays visible when it is idle, offline, or has a new provider ID.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    ForEach(state.fleetRoster) { entry in
+                        HStack(spacing: 10) {
+                            TextField("Name", text: fleetNameBinding(for: entry))
+                                .frame(width: 150)
+                            Text(entry.serialNumber)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button {
+                                state.removeFleetMachine(serialNumber: entry.serialNumber)
+                            } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Remove this box from the roster")
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            } label: {
+                Label("Fleet roster", systemImage: "macbook.and.iphone")
+            }
+
+            GroupBox {
+                HStack(spacing: 8) {
+                    TextField("Name", text: $newFleetName)
+                    TextField("Hardware serial", text: $newFleetSerial)
+                        .font(.body.monospaced())
+                    Button("Add box") {
+                        state.addFleetMachine(name: newFleetName, serialNumber: newFleetSerial)
+                        newFleetName = ""
+                        newFleetSerial = ""
+                    }
+                    .disabled(newFleetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || newFleetSerial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .padding(.vertical, 2)
+            } label: {
+                Label("Add a box", systemImage: "plus.circle")
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func fleetNameBinding(for entry: FleetRosterEntry) -> Binding<String> {
+        Binding {
+            state.fleetRoster.first(where: { $0.serialNumber == entry.serialNumber })?.name ?? entry.name
+        } set: { name in
+            state.renameFleetMachine(serialNumber: entry.serialNumber, name: name)
+        }
+    }
+
     private func sectionRow(_ section: MenuSection) -> some View {
         HStack(alignment: .center, spacing: 12) {
             Image(systemName: section.systemImage)
@@ -333,6 +400,7 @@ struct SettingsView: View {
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case menu
     case serving
+    case fleet
 
     var id: Self { self }
 
@@ -340,6 +408,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .menu: return "Menu"
         case .serving: return "Serving"
+        case .fleet: return "Fleet"
         }
     }
 }

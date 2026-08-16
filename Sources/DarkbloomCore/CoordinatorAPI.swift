@@ -77,7 +77,7 @@ public struct CoordinatorAPI {
         }
     }
 
-    public struct AttestedProvider: Codable {
+    public struct AttestedProvider: Codable, Sendable {
         public var providerID: String
         public var chipName: String
         public var hardwareModel: String

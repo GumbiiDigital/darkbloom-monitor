@@ -39,6 +39,9 @@ final class AppState: ObservableObject {
     @Published var remoteError: String?
     @Published var controlBusy = false
     @Published var controlError: String?
+    @Published var fleetRoster: [FleetRosterEntry]
+    @Published var fleetPeriod: FleetPeriod = .day
+    @Published var fleetSnapshot: FleetSnapshot?
     @Published var catalog: [CoordinatorAPI.CatalogModel] = []
     @Published var currentModels: [String] = []
     @Published var downloadedModels: Set<String> = []
@@ -60,8 +63,16 @@ final class AppState: ObservableObject {
     private var hardwareRefreshInFlight = false
     private var fanControlInFlight = false
     private var fanControlSettings: FanControlSettings = .defaultValue
+    private var connectedProviders: [CoordinatorAPI.AttestedProvider] = []
+    private var identityHistory: FleetIdentityHistory
+    private var accountEarnings: CoordinatorAPI.AccountEarnings?
 
     private static let daemonReadMissTolerance = 2
+
+    init() {
+        fleetRoster = FleetRosterStore.loadRoster()
+        identityHistory = FleetRosterStore.loadIdentityHistory()
+    }
 
     func bindPreferences(_ preferences: MenuPreferencesStore) {
         fanControlSettings = preferences.snapshot.fanControl
@@ -232,16 +243,69 @@ final class AppState: ObservableObject {
                 remoteError = "Fleet unavailable — \(error.localizedDescription)"
             }
             earnings = acct
+            accountEarnings = acct
+            connectedProviders = connected
+            rebuildFleetSnapshot()
             windows = EarningsMath.windows(acct.earnings)
             hourlyJobs = EarningsMath.hourlyBuckets(acct.earnings)
             fleet = Fleet.machines(connected: connected, earnings: acct.earnings, localSerial: localSerial)
         } catch {
             remoteError = error.localizedDescription
             earnings = nil
+            accountEarnings = nil
+            connectedProviders = []
+            fleetSnapshot = nil
             windows = EarningsWindows()
             hourlyJobs = []
             fleet = []
         }
+    }
+
+    func setFleetPeriod(_ period: FleetPeriod) {
+        fleetPeriod = period
+        rebuildFleetSnapshot()
+    }
+
+    func addFleetMachine(name: String, serialNumber: String) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSerial = serialNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !trimmedSerial.isEmpty,
+              !fleetRoster.contains(where: { $0.serialNumber == trimmedSerial }) else { return }
+        fleetRoster.append(FleetRosterEntry(name: trimmedName, serialNumber: trimmedSerial))
+        FleetRosterStore.saveRoster(fleetRoster)
+        rebuildFleetSnapshot()
+    }
+
+    func removeFleetMachine(serialNumber: String) {
+        fleetRoster.removeAll { $0.serialNumber == serialNumber }
+        FleetRosterStore.saveRoster(fleetRoster)
+        rebuildFleetSnapshot()
+    }
+
+    func renameFleetMachine(serialNumber: String, name: String) {
+        guard let index = fleetRoster.firstIndex(where: { $0.serialNumber == serialNumber }) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        fleetRoster[index].name = trimmed
+        FleetRosterStore.saveRoster(fleetRoster)
+        rebuildFleetSnapshot()
+    }
+
+    private func rebuildFleetSnapshot() {
+        guard let accountEarnings else {
+            fleetSnapshot = nil
+            return
+        }
+        let result = FleetAnalytics.snapshot(
+            roster: fleetRoster,
+            connected: connectedProviders,
+            earnings: accountEarnings,
+            identityHistory: identityHistory,
+            period: fleetPeriod
+        )
+        identityHistory = result.identityHistory
+        FleetRosterStore.saveIdentityHistory(identityHistory)
+        fleetSnapshot = result.snapshot
     }
 
     /// Catalog + local download inventory + current selection, for the

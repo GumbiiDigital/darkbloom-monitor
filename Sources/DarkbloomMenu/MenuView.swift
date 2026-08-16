@@ -221,9 +221,7 @@ struct MenuView: View {
         if !state.hourlyJobs.isEmpty {
             sections.append(.activity)
         }
-        if state.fleet.contains(where: { !$0.isThisMac }) {
-            sections.append(.fleet)
-        }
+        sections.append(.fleet)
         return sections
     }
 
@@ -499,8 +497,9 @@ struct MenuView: View {
     }
 
     private var fleetSubtitle: String {
-        let count = state.fleet.count
-        return "\(count) online \(count == 1 ? "Mac" : "Macs")"
+        guard let snapshot = state.fleetSnapshot else { return "Loading fleet" }
+        let online = snapshot.rows.filter { $0.status == .online }.count
+        return "\(online)/\(snapshot.rows.count) online · \(Fmt.count(snapshot.totals.outputTokens)) output"
     }
 
     private var earningsDetail: some View {
@@ -696,32 +695,125 @@ struct MenuView: View {
 
     private var fleetDetail: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(state.fleet) { machine in
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(machine.isThisMac ? Color(nsColor: state.status.color) : .green)
-                        .frame(width: 8, height: 8)
-                    VStack(alignment: .leading, spacing: 1) {
-                        HStack(spacing: 5) {
-                            Text(machine.displayName)
-                                .font(.callout.weight(.medium))
-                            if machine.isThisMac {
-                                Text("this Mac")
-                                    .font(.caption2)
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 1)
-                                    .background(.quaternary, in: Capsule())
-                            }
-                        }
-                        Text(fleetMachineSubtitle(machine))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Spacer(minLength: 0)
+            Picker("Period", selection: Binding(
+                get: { state.fleetPeriod },
+                set: { state.setFleetPeriod($0) }
+            )) {
+                ForEach(FleetPeriod.allCases) { period in
+                    Text(period.title).tag(period)
                 }
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            if let snapshot = state.fleetSnapshot {
+                fleetTotals(snapshot.totals, sampled: snapshot.historyIsSampled)
+                ForEach(snapshot.rows) { row in
+                    fleetRow(row)
+                }
+                if snapshot.unattributed.jobs > 0 || snapshot.unattributed.earningsMicroUSD > 0 {
+                    fleetUnattributed(snapshot.unattributed)
+                }
+            } else {
+                Text("Loading fleet data…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func fleetTotals(_ metrics: FleetMetrics, sampled: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Fleet total · \(state.fleetPeriod.title)")
+                .font(.caption.weight(.semibold))
+            HStack(spacing: 10) {
+                fleetMetric("Output", Fmt.count(metrics.outputTokens))
+                fleetMetric("Input", Fmt.count(metrics.inputTokens))
+                fleetMetric("Jobs", Fmt.count(UInt64(max(0, metrics.jobs))))
+                fleetMetric("Earned", Fmt.usd(metrics.earningsMicroUSD))
+            }
+            if sampled {
+                Text(state.fleetPeriod == .lifetime
+                     ? "Recent API sample; lifetime earnings gap stays unattributed."
+                     : "Recent API history is capped; this period uses returned jobs.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(8)
+        .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func fleetRow(_ row: FleetRow) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(fleetStatusColor(row.status))
+                    .frame(width: 7, height: 7)
+                Text(row.roster.name)
+                    .font(.callout.weight(.medium))
+                Text(row.status.title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Text(Fmt.usd(row.metrics.earningsMicroUSD))
+                    .font(.caption.monospacedDigit())
+            }
+            HStack(spacing: 6) {
+                Text("\(row.modelsText) · \(row.trustText)")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+                Text("out \(Fmt.count(row.metrics.outputTokens)) · in \(Fmt.count(row.metrics.inputTokens))")
+                    .font(.caption2.monospacedDigit())
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text("\(Fmt.count(UInt64(max(0, row.metrics.jobs)))) jobs")
+                if let last = row.metrics.lastActivity {
+                    Text("· last \(Fmt.ago(last))")
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 3)
+    }
+
+    private func fleetUnattributed(_ metrics: FleetMetrics) -> some View {
+        HStack {
+            Image(systemName: "questionmark.circle")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Unattributed")
+                    .font(.callout.weight(.medium))
+                Text("\(Fmt.count(UInt64(max(0, metrics.jobs)))) jobs · out \(Fmt.count(metrics.outputTokens))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(Fmt.usd(metrics.earningsMicroUSD))
+                .font(.caption.monospacedDigit())
+        }
+        .padding(.vertical, 3)
+    }
+
+    private func fleetMetric(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value)
+                .font(.caption.monospacedDigit().weight(.medium))
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func fleetStatusColor(_ status: FleetRowStatus) -> Color {
+        switch status {
+        case .online: return .green
+        case .offline: return .orange
+        case .neverSeen: return .secondary
         }
     }
 
