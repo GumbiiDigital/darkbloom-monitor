@@ -36,6 +36,7 @@ struct MenuView: View {
     @State private var pickerIntent: ServingPickerIntent = .restart
     @State private var selectedModels: Set<String> = []
     @State private var panelContentSize: CGSize = .zero
+    @State private var expandedFleetMachines: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -745,20 +746,34 @@ struct MenuView: View {
     }
 
     private func fleetRow(_ row: FleetRow) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(fleetStatusColor(row.status))
-                    .frame(width: 7, height: 7)
-                Text(row.roster.name)
-                    .font(.callout.weight(.medium))
-                Text(row.status.title)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-                Text(Fmt.usd(row.metrics.earningsMicroUSD))
-                    .font(.caption.monospacedDigit())
+        let telemetry = state.machineTelemetry[row.roster.serialNumber]
+        let isExpanded = expandedFleetMachines.contains(row.id)
+        return VStack(alignment: .leading, spacing: 3) {
+            Button {
+                if isExpanded {
+                    expandedFleetMachines.remove(row.id)
+                } else {
+                    expandedFleetMachines.insert(row.id)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .frame(width: 10)
+                    Circle()
+                        .fill(fleetStatusColor(row.status))
+                        .frame(width: 7, height: 7)
+                    Text(row.roster.name)
+                        .font(.callout.weight(.medium))
+                    Text(row.status.title)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    Text(Fmt.usd(row.metrics.earningsMicroUSD))
+                        .font(.caption.monospacedDigit())
+                }
             }
+            .buttonStyle(.plain)
             HStack(spacing: 6) {
                 Text("\(row.modelsText) · \(row.trustText)")
                     .lineLimit(1)
@@ -777,8 +792,62 @@ struct MenuView: View {
             }
             .font(.caption2)
             .foregroundStyle(.tertiary)
+            if isExpanded {
+                machineTelemetryDetail(telemetry, fallbackModel: row.modelsText)
+            }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func machineTelemetryDetail(_ telemetry: MachineTelemetry?, fallbackModel: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if let telemetry, let daemon = telemetry.state {
+                let loaded = daemon.currentModel ?? fallbackModel
+                let warm = daemon.warmModels?.isEmpty == false ? daemon.warmModels!.joined(separator: ", ") : "None reported"
+                Text("Loaded: \(loaded) · Warm: \(warm)")
+                    .lineLimit(2)
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 5) {
+                    machineMetric("Requests", Fmt.count(daemon.stats?.requestsServed ?? 0))
+                    machineMetric("Session tokens", Fmt.count(daemon.stats?.tokensGenerated ?? 0))
+                    machineMetric("Active GPU", memoryText(daemon.capacity?.gpuMemoryActiveGb))
+                    machineMetric("GPU cache", memoryText(daemon.capacity?.gpuMemoryCacheGb))
+                    machineMetric("Inference", daemon.inferenceActive == true ? "Active" : "Idle")
+                    machineMetric("Uptime", Fmt.uptime(daemon.uptime()))
+                    machineMetric("Memory", percentText(daemon.system?.memoryPressure))
+                    machineMetric("Thermal", daemon.system?.thermalState ?? "Not reported")
+                }
+                Text("\(telemetry.source.rawValue) · state \(daemon.isFresh() ? "fresh" : "stale") · checked \(Fmt.ago(telemetry.checkedAt))")
+                    .foregroundStyle(daemon.isFresh() ? Color.secondary : Color.orange)
+            } else if let telemetry {
+                Text(telemetry.error ?? "No daemon state returned")
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Loading machine telemetry…")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.caption2)
+        .padding(.leading, 23)
+        .padding(.top, 3)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func machineMetric(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value).font(.caption2.monospacedDigit().weight(.medium))
+            Text(label).foregroundStyle(.tertiary)
+        }
+    }
+
+    private func memoryText(_ gigabytes: Double?) -> String {
+        guard let gigabytes else { return "-" }
+        return String(format: "%.1f GB", gigabytes)
+    }
+
+    private func percentText(_ value: Double?) -> String {
+        guard let value else { return "Not reported" }
+        return String(format: "%.0f%%", value * 100)
     }
 
     private func fleetUnattributed(_ metrics: FleetMetrics) -> some View {

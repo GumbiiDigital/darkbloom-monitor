@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var selectedTab: SettingsTab = .menu
     @State private var newFleetName = ""
     @State private var newFleetSerial = ""
+    @State private var newFleetSSHTarget = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -218,10 +219,13 @@ struct SettingsView: View {
                     ForEach(state.fleetRoster) { entry in
                         HStack(spacing: 10) {
                             TextField("Name", text: fleetNameBinding(for: entry))
-                                .frame(width: 150)
+                                .frame(width: 120)
                             Text(entry.serialNumber)
                                 .font(.caption.monospaced())
                                 .foregroundStyle(.secondary)
+                            TextField("SSH target", text: fleetSSHTargetBinding(for: entry))
+                                .frame(minWidth: 135)
+                                .help("Key-only SSH destination used only for passive daemon-state reads")
                             Spacer()
                             Button {
                                 state.removeFleetMachine(serialNumber: entry.serialNumber)
@@ -243,10 +247,12 @@ struct SettingsView: View {
                     TextField("Name", text: $newFleetName)
                     TextField("Hardware serial", text: $newFleetSerial)
                         .font(.body.monospaced())
+                    TextField("SSH target (optional)", text: $newFleetSSHTarget)
                     Button("Add box") {
-                        state.addFleetMachine(name: newFleetName, serialNumber: newFleetSerial)
+                        state.addFleetMachine(name: newFleetName, serialNumber: newFleetSerial, sshTarget: newFleetSSHTarget)
                         newFleetName = ""
                         newFleetSerial = ""
+                        newFleetSSHTarget = ""
                     }
                     .disabled(newFleetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || newFleetSerial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
@@ -265,6 +271,14 @@ struct SettingsView: View {
             state.fleetRoster.first(where: { $0.serialNumber == entry.serialNumber })?.name ?? entry.name
         } set: { name in
             state.renameFleetMachine(serialNumber: entry.serialNumber, name: name)
+        }
+    }
+
+    private func fleetSSHTargetBinding(for entry: FleetRosterEntry) -> Binding<String> {
+        Binding {
+            state.fleetRoster.first(where: { $0.serialNumber == entry.serialNumber })?.sshTarget ?? ""
+        } set: { target in
+            state.setFleetMachineSSHTarget(serialNumber: entry.serialNumber, target: target)
         }
     }
 

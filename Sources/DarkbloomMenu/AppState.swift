@@ -42,6 +42,7 @@ final class AppState: ObservableObject {
     @Published var fleetRoster: [FleetRosterEntry]
     @Published var fleetPeriod: FleetPeriod = .day
     @Published var fleetSnapshot: FleetSnapshot?
+    @Published var machineTelemetry: [String: MachineTelemetry] = [:]
     @Published var catalog: [CoordinatorAPI.CatalogModel] = []
     @Published var currentModels: [String] = []
     @Published var downloadedModels: Set<String> = []
@@ -56,6 +57,7 @@ final class AppState: ObservableObject {
 
     private var localTimer: Timer?
     private var remoteTimer: Timer?
+    private var machineTelemetryTimer: Timer?
     private var preferencesCancellable: AnyCancellable?
     private let localSerial = AppState.machineSerialNumber()
     private var lastFreshDaemon: DaemonState?
@@ -66,6 +68,7 @@ final class AppState: ObservableObject {
     private var connectedProviders: [CoordinatorAPI.AttestedProvider] = []
     private var identityHistory: FleetIdentityHistory
     private var accountEarnings: CoordinatorAPI.AccountEarnings?
+    private var machineTelemetryRefreshInFlight = false
 
     private static let daemonReadMissTolerance = 2
 
@@ -125,6 +128,7 @@ final class AppState: ObservableObject {
         refreshLocal()
         refreshHardwareMetrics()
         Task { await refreshRemote() }
+        refreshMachineTelemetry()
         Task { await refreshCatalog() }
         localTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -137,6 +141,10 @@ final class AppState: ObservableObject {
             Task { await self?.refreshRemote() }
         }
         remoteTimer?.tolerance = 5
+        machineTelemetryTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshMachineTelemetry() }
+        }
+        machineTelemetryTimer?.tolerance = 3
     }
 
     // MARK: - Local state (daemon-state.json)
@@ -150,6 +158,23 @@ final class AppState: ObservableObject {
             return
         }
         status = state.trust?.status == "online" ? .serving : .running
+    }
+
+    func refreshMachineTelemetry() {
+        guard !machineTelemetryRefreshInFlight else { return }
+        machineTelemetryRefreshInFlight = true
+        let roster = fleetRoster
+        let serial = localSerial
+        let localState = daemon
+        Task {
+            let telemetry = await MachineTelemetryReader.collect(
+                roster: roster,
+                localSerial: serial,
+                localState: localState
+            )
+            machineTelemetry = telemetry
+            machineTelemetryRefreshInFlight = false
+        }
     }
 
     func refreshModelSelection() {
@@ -266,20 +291,22 @@ final class AppState: ObservableObject {
         rebuildFleetSnapshot()
     }
 
-    func addFleetMachine(name: String, serialNumber: String) {
+    func addFleetMachine(name: String, serialNumber: String, sshTarget: String? = nil) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSerial = serialNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty, !trimmedSerial.isEmpty,
               !fleetRoster.contains(where: { $0.serialNumber == trimmedSerial }) else { return }
-        fleetRoster.append(FleetRosterEntry(name: trimmedName, serialNumber: trimmedSerial))
+        fleetRoster.append(FleetRosterEntry(name: trimmedName, serialNumber: trimmedSerial, sshTarget: sshTarget))
         FleetRosterStore.saveRoster(fleetRoster)
         rebuildFleetSnapshot()
+        refreshMachineTelemetry()
     }
 
     func removeFleetMachine(serialNumber: String) {
         fleetRoster.removeAll { $0.serialNumber == serialNumber }
         FleetRosterStore.saveRoster(fleetRoster)
         rebuildFleetSnapshot()
+        refreshMachineTelemetry()
     }
 
     func renameFleetMachine(serialNumber: String, name: String) {
@@ -289,6 +316,14 @@ final class AppState: ObservableObject {
         fleetRoster[index].name = trimmed
         FleetRosterStore.saveRoster(fleetRoster)
         rebuildFleetSnapshot()
+    }
+
+    func setFleetMachineSSHTarget(serialNumber: String, target: String) {
+        guard let index = fleetRoster.firstIndex(where: { $0.serialNumber == serialNumber }) else { return }
+        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        fleetRoster[index].sshTarget = trimmed.isEmpty ? nil : trimmed
+        FleetRosterStore.saveRoster(fleetRoster)
+        refreshMachineTelemetry()
     }
 
     private func rebuildFleetSnapshot() {

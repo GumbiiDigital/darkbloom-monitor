@@ -3,12 +3,16 @@ import Foundation
 public struct FleetRosterEntry: Codable, Equatable, Identifiable, Sendable {
     public var name: String
     public var serialNumber: String
+    /// Optional key-only SSH destination used only to read daemon-state.json.
+    /// Keep deployment-specific targets in local user defaults, not source control.
+    public var sshTarget: String?
 
     public var id: String { serialNumber }
 
-    public init(name: String, serialNumber: String) {
+    public init(name: String, serialNumber: String, sshTarget: String? = nil) {
         self.name = name
         self.serialNumber = serialNumber
+        self.sshTarget = sshTarget
     }
 }
 
@@ -26,18 +30,36 @@ public enum FleetRosterDefaults {
 public enum FleetRosterStore {
     private static let rosterKey = "darkbloom.monitor.fleet.roster.v1"
     private static let identityKey = "darkbloom.monitor.fleet.identity-history.v1"
+    private static let sshTargetsKey = "darkbloom.monitor.fleet.ssh-targets.v1"
 
     public static func loadRoster(defaults: UserDefaults = .standard) -> [FleetRosterEntry] {
+        let sshTargets = defaults.dictionary(forKey: sshTargetsKey) as? [String: String] ?? [:]
         guard let data = defaults.data(forKey: rosterKey),
               let roster = try? JSONDecoder().decode([FleetRosterEntry].self, from: data),
               !roster.isEmpty
-        else { return FleetRosterDefaults.entries }
-        return roster
+        else {
+            return applySSHTargets(sshTargets, to: FleetRosterDefaults.entries)
+        }
+        return applySSHTargets(sshTargets, to: roster)
     }
 
     public static func saveRoster(_ roster: [FleetRosterEntry], defaults: UserDefaults = .standard) {
         guard let data = try? JSONEncoder().encode(roster) else { return }
         defaults.set(data, forKey: rosterKey)
+    }
+
+    /// Private deployment targets can be supplied through user defaults so a
+    /// public build never needs to carry internal hostnames or addresses.
+    private static func applySSHTargets(
+        _ targets: [String: String],
+        to roster: [FleetRosterEntry]
+    ) -> [FleetRosterEntry] {
+        roster.map { entry in
+            guard entry.sshTarget == nil, let target = targets[entry.serialNumber] else { return entry }
+            var configured = entry
+            configured.sshTarget = target
+            return configured
+        }
     }
 
     public static func loadIdentityHistory(defaults: UserDefaults = .standard) -> FleetIdentityHistory {

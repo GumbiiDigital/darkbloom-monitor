@@ -16,7 +16,7 @@ public enum MenuSection: String, CaseIterable, Codable, Hashable, Identifiable {
         case .thisMac: return "This Mac"
         case .health: return "Health"
         case .activity: return "Activity"
-        case .fleet: return "My Macs"
+        case .fleet: return "Machines"
         }
     }
 
@@ -38,7 +38,7 @@ public enum MenuSection: String, CaseIterable, Codable, Hashable, Identifiable {
         case .activity:
             return "Hourly paid jobs chart for the last 24 hours."
         case .fleet:
-            return "Other currently connected Macs that belong to this account."
+            return "Every provider box, with traffic and expandable live daemon telemetry."
         }
     }
 

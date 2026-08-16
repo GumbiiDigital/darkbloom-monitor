@@ -168,6 +168,17 @@ final class FleetAnalyticsTests: XCTestCase {
         XCTAssertEqual(Set(FleetRosterDefaults.entries.map(\.name)), ["WV0", "G2YF", "HDCF", "KDQ", "DRXY", "M5"])
     }
 
+    func testRosterAppliesPrivateSSHTargetOverridesWithoutChangingDefaults() {
+        let defaults = UserDefaults(suiteName: "FleetRosterStoreTests")!
+        defaults.removePersistentDomain(forName: "FleetRosterStoreTests")
+        defaults.set(["WV0NCDC2TX": "operator@fleet-host"], forKey: "darkbloom.monitor.fleet.ssh-targets.v1")
+
+        let roster = FleetRosterStore.loadRoster(defaults: defaults)
+
+        XCTAssertEqual(roster.first(where: { $0.serialNumber == "WV0NCDC2TX" })?.sshTarget, "operator@fleet-host")
+        XCTAssertNil(FleetRosterDefaults.entries.first(where: { $0.serialNumber == "WV0NCDC2TX" })?.sshTarget)
+    }
+
     func testRollingPeriodFiltersJobsWithoutChangingRoster() {
         let roster = [FleetRosterEntry(name: "A", serialNumber: "A")]
         let entries = [

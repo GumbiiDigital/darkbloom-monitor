@@ -2,8 +2,8 @@ import Foundation
 
 /// Mirror of the provider's ~/.darkbloom/daemon-state.json (schema 1).
 /// Written by the provider every heartbeat; considered stale after 90s.
-public struct DaemonState: Decodable {
-    public struct Trust: Decodable {
+public struct DaemonState: Decodable, Sendable {
+    public struct Trust: Decodable, Sendable {
         public var trustLevel: String
         public var status: String
         public var reason: String
@@ -16,7 +16,7 @@ public struct DaemonState: Decodable {
         }
     }
 
-    public struct Stats: Decodable {
+    public struct Stats: Decodable, Sendable {
         public var requestsServed: UInt64
         public var tokensGenerated: UInt64
 
@@ -26,7 +26,7 @@ public struct DaemonState: Decodable {
         }
     }
 
-    public struct Capacity: Decodable {
+    public struct Capacity: Decodable, Sendable {
         public var totalMemoryGb: Double
         public var gpuMemoryActiveGb: Double
         public var gpuMemoryCacheGb: Double?
@@ -40,7 +40,7 @@ public struct DaemonState: Decodable {
 
     /// Host health snapshot; the provider includes it only on some versions
     /// and heartbeats, so every field is optional.
-    public struct SystemInfo: Decodable {
+    public struct SystemInfo: Decodable, Sendable {
         public var memoryPressure: Double?
         public var cpuUsage: Double?
         public var thermalState: String?
