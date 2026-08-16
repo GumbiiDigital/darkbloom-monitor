@@ -188,6 +188,18 @@ public struct FleetRow: Identifiable, Equatable, Sendable {
 
     public var id: String { roster.id }
 
+    public init(
+        roster: FleetRosterEntry,
+        live: CoordinatorAPI.AttestedProvider? = nil,
+        metrics: FleetMetrics,
+        status: FleetRowStatus
+    ) {
+        self.roster = roster
+        self.live = live
+        self.metrics = metrics
+        self.status = status
+    }
+
     public var modelsText: String {
         guard let models = live?.models, !models.isEmpty else { return "No model reported" }
         return models.joined(separator: ", ")

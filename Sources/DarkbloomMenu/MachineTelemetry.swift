@@ -94,3 +94,63 @@ enum MachineTelemetryReader {
         }
     }
 }
+
+enum RemoteProviderController {
+    static func run(target: String?, verb: String, models: [String] = [], prewarm: Bool = false) -> String? {
+        guard let target = target?.trimmingCharacters(in: .whitespacesAndNewlines),
+              isSafeSSHTarget(target),
+              ["start", "stop", "restart"].contains(verb),
+              models.allSatisfy(isSafeModelID)
+        else { return "Remote provider target is not configured" }
+
+        let command: String
+        if verb == "start" {
+            let timestamp = ISO8601DateFormatter().string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            let flags = (prewarm ? ["--local-endpoint"] : []) + models.flatMap { ["--model", $0] }
+            let renderedFlags = flags.joined(separator: " ")
+            command = "mkdir -p ~/.darkbloom/savepoints; if [ -f ~/.config/darkbloom/provider.toml ]; then cp ~/.config/darkbloom/provider.toml ~/.darkbloom/savepoints/provider-\(timestamp).toml; fi; exec ~/.darkbloom/bin/darkbloom start \(renderedFlags)"
+        } else {
+            command = "exec ~/.darkbloom/bin/darkbloom \(verb)"
+        }
+
+        let process = Process()
+        let error = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = [
+            "-o", "BatchMode=yes",
+            "-o", "PasswordAuthentication=no",
+            "-o", "ConnectTimeout=5",
+            "-o", "ConnectionAttempts=1",
+            target,
+            command,
+        ]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = error
+        process.standardInput = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                return "Remote darkbloom \(verb) failed"
+            }
+            return nil
+        } catch {
+            return "Remote darkbloom \(verb) could not start"
+        }
+    }
+
+    private static func isSafeSSHTarget(_ target: String) -> Bool {
+        guard !target.hasPrefix("-"), !target.isEmpty else { return false }
+        return target.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._@:-")).contains($0)
+        }
+    }
+
+    private static func isSafeModelID(_ id: String) -> Bool {
+        !id.isEmpty && id.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-")).contains($0)
+        }
+    }
+}

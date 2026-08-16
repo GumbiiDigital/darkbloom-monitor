@@ -44,6 +44,8 @@ final class AppState: ObservableObject {
     @Published var fleetSnapshot: FleetSnapshot?
     @Published var machineTelemetry: [String: MachineTelemetry] = [:]
     @Published var lastCoordinatorRefresh: Date?
+    @Published var remoteControlBusySerial: String?
+    @Published var remoteControlErrors: [String: String] = [:]
     @Published var catalog: [CoordinatorAPI.CatalogModel] = []
     @Published var currentModels: [String] = []
     @Published var downloadedModels: Set<String> = []
@@ -142,7 +144,7 @@ final class AppState: ObservableObject {
             Task { await self?.refreshRemote() }
         }
         remoteTimer?.tolerance = 5
-        machineTelemetryTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+        machineTelemetryTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshMachineTelemetry() }
         }
         machineTelemetryTimer?.tolerance = 3
@@ -153,6 +155,10 @@ final class AppState: ObservableObject {
         refreshHardwareMetrics()
         refreshMachineTelemetry()
         await refreshRemote()
+    }
+
+    func isLocalMachine(serialNumber: String) -> Bool {
+        localSerial == serialNumber
     }
 
     // MARK: - Local state (daemon-state.json)
@@ -182,6 +188,49 @@ final class AppState: ObservableObject {
             )
             machineTelemetry = telemetry
             machineTelemetryRefreshInFlight = false
+        }
+    }
+
+    func runRemoteControl(serialNumber: String, verb: String) {
+        guard remoteControlBusySerial == nil,
+              let entry = fleetRoster.first(where: { $0.serialNumber == serialNumber })
+        else { return }
+        remoteControlBusySerial = serialNumber
+        remoteControlErrors[serialNumber] = nil
+        let target = entry.sshTarget
+        Task {
+            let error = await Task.detached(priority: .userInitiated) {
+                RemoteProviderController.run(target: target, verb: verb)
+            }.value
+            if let error {
+                remoteControlErrors[serialNumber] = error
+            }
+            remoteControlBusySerial = nil
+            try? await Task.sleep(for: .seconds(3))
+            refreshMachineTelemetry()
+            await refreshRemote()
+        }
+    }
+
+    func startRemoteServing(serialNumber: String, models: [String], prewarm: Bool) {
+        guard !models.isEmpty,
+              remoteControlBusySerial == nil,
+              let entry = fleetRoster.first(where: { $0.serialNumber == serialNumber })
+        else { return }
+        remoteControlBusySerial = serialNumber
+        remoteControlErrors[serialNumber] = nil
+        let target = entry.sshTarget
+        Task {
+            let error = await Task.detached(priority: .userInitiated) {
+                RemoteProviderController.run(target: target, verb: "start", models: models, prewarm: prewarm)
+            }.value
+            if let error {
+                remoteControlErrors[serialNumber] = error
+            }
+            remoteControlBusySerial = nil
+            try? await Task.sleep(for: .seconds(4))
+            refreshMachineTelemetry()
+            await refreshRemote()
         }
     }
 
@@ -285,13 +334,6 @@ final class AppState: ObservableObject {
             lastCoordinatorRefresh = Date()
         } catch {
             remoteError = error.localizedDescription
-            earnings = nil
-            accountEarnings = nil
-            connectedProviders = []
-            fleetSnapshot = nil
-            windows = EarningsWindows()
-            hourlyJobs = []
-            fleet = []
             lastCoordinatorRefresh = Date()
         }
     }

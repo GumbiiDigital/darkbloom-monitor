@@ -37,6 +37,7 @@ enum ServingPickerIntent {
 
 struct ServingModelPickerView: View {
     var intent: ServingPickerIntent
+    var machineName: String?
     var models: [CoordinatorAPI.CatalogModel]
     var physicalMemoryGB: Double
     var downloadedModels: Set<String>
@@ -97,7 +98,7 @@ struct ServingModelPickerView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(intent.title)
                     .font(.callout.weight(.semibold))
-                Text(intent.subtitle)
+                Text(machineName.map { "Choose the models \($0) should serve." } ?? intent.subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

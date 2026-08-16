@@ -37,6 +37,7 @@ struct MenuView: View {
     @State private var selectedModels: Set<String> = []
     @State private var panelContentSize: CGSize = .zero
     @State private var expandedFleetMachines: Set<String> = []
+    @State private var pickerTargetSerial: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -717,9 +718,12 @@ struct MenuView: View {
                     fleetUnattributed(snapshot.unattributed)
                 }
             } else {
-                Text("Loading fleet data…")
-                    .font(.caption)
+                Text("Coordinator history unavailable. Live machine telemetry continues below.")
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
+                ForEach(state.fleetRoster) { entry in
+                    fleetRow(FleetRow(roster: entry, live: nil, metrics: FleetMetrics(), status: .neverSeen))
+                }
             }
         }
     }
@@ -794,35 +798,62 @@ struct MenuView: View {
             .font(.caption2)
             .foregroundStyle(.tertiary)
             if isExpanded {
-                machineTelemetryDetail(telemetry, fallbackModel: row.modelsText)
+                machineTelemetryDetail(row: row, telemetry: telemetry)
             }
         }
         .padding(.vertical, 4)
     }
 
     @ViewBuilder
-    private func machineTelemetryDetail(_ telemetry: MachineTelemetry?, fallbackModel: String) -> some View {
+    private func machineTelemetryDetail(row: FleetRow, telemetry: MachineTelemetry?) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             if let telemetry, let daemon = telemetry.state {
-                let loaded = daemon.currentModel ?? fallbackModel
-                let warm = daemon.warmModels?.isEmpty == false ? daemon.warmModels!.joined(separator: ", ") : "None reported"
-                Text("Loaded: \(loaded) · Warm: \(warm)")
-                    .lineLimit(2)
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 5) {
-                    machineMetric("Requests", Fmt.count(daemon.stats?.requestsServed ?? 0))
-                    machineMetric("Session tokens", Fmt.count(daemon.stats?.tokensGenerated ?? 0))
-                    machineMetric("Active GPU", memoryText(daemon.capacity?.gpuMemoryActiveGb))
-                    machineMetric("GPU cache", memoryText(daemon.capacity?.gpuMemoryCacheGb))
-                    machineMetric("Inference", daemon.inferenceActive == true ? "Active" : "Idle")
-                    machineMetric("Uptime", Fmt.uptime(daemon.uptime()))
-                    machineMetric("Memory", percentText(daemon.system?.memoryPressure))
-                    machineMetric("Thermal", daemon.system?.thermalState ?? "Not reported")
+                let models = daemon.warmModels?.isEmpty == false
+                    ? daemon.warmModels!
+                    : [daemon.currentModel].compactMap { $0 }
+                if let hardware = row.live {
+                    HStack(spacing: 6) {
+                        Label("\(hardware.hardwareModel) · \(hardware.memoryGB) GB · \(hardware.gpuCores) GPU", systemImage: "cpu")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        TrustBadge(trustLevel: hardware.trustLevel)
+                    }
                 }
-                Text("\(telemetry.source.rawValue) · state \(daemon.isFresh() ? "fresh" : "stale") · checked \(Fmt.ago(telemetry.checkedAt))")
+                if !models.isEmpty {
+                    VStack(alignment: .leading, spacing: 5) {
+                        SectionMicroHeader(title: "Models", trailing: "\(models.count) models · \(models.count) loaded")
+                        LazyVGrid(columns: modelGridColumns, alignment: .leading, spacing: 6) {
+                            ForEach(models, id: \.self) { id in
+                                ModelPill(id: id, loaded: true)
+                            }
+                        }
+                    }
+                }
+                VStack(spacing: 5) {
+                    InfoRow("Requests", Fmt.count(daemon.stats?.requestsServed ?? 0), detail: "session")
+                    InfoRow("Tokens", Fmt.count(daemon.stats?.tokensGenerated ?? 0), detail: "session")
+                    if let capacity = daemon.capacity {
+                        InfoRow("GPU memory", gpuMemoryText(capacity))
+                    }
+                    if !daemon.version.isEmpty {
+                        InfoRow("Provider version", "v\(daemon.version)")
+                    }
+                    InfoRow("Uptime", Fmt.uptime(daemon.uptime()))
+                }
+                remoteMachineControls(row: row, telemetry: telemetry)
+                if let error = state.remoteControlErrors[row.id] {
+                    Text(error).foregroundStyle(.orange)
+                }
+                Text("\(telemetry.source.rawValue) · \(daemon.isFresh() ? "fresh" : "stale") · updated \(Fmt.ago(telemetry.checkedAt))")
                     .foregroundStyle(daemon.isFresh() ? Color.secondary : Color.orange)
+                Text("Session stats reset when the provider restarts.")
+                    .foregroundStyle(.tertiary)
             } else if let telemetry {
                 Text(telemetry.error ?? "No daemon state returned")
                     .foregroundStyle(.secondary)
+                remoteMachineControls(row: row, telemetry: telemetry)
             } else {
                 Text("Loading machine telemetry…")
                     .foregroundStyle(.secondary)
@@ -830,15 +861,39 @@ struct MenuView: View {
         }
         .font(.caption2)
         .padding(.leading, 23)
-        .padding(.top, 3)
+        .padding(.top, 5)
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private func machineMetric(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(value).font(.caption2.monospacedDigit().weight(.medium))
-            Text(label).foregroundStyle(.tertiary)
+    private func remoteMachineControls(row: FleetRow, telemetry: MachineTelemetry?) -> some View {
+        let isRunning = telemetry?.state?.isFresh() == true
+        let isLocal = state.isLocalMachine(serialNumber: row.id)
+        let isBusy = state.remoteControlBusySerial == row.id
+        return HStack(spacing: 8) {
+            if isRunning {
+                Button {
+                    if isLocal {
+                        state.runControl("stop")
+                    } else {
+                        state.runRemoteControl(serialNumber: row.id, verb: "stop")
+                    }
+                } label: {
+                    Image(systemName: "stop.fill")
+                }
+                .help("Stop \(row.roster.name)")
+            }
+            Button {
+                openServingPicker(isRunning ? .restart : .start, targetSerial: isLocal ? nil : row.id)
+            } label: {
+                Image(systemName: isRunning ? "arrow.clockwise" : "play.fill")
+            }
+            .help("Choose models and \(isRunning ? "restart" : "start") \(row.roster.name)")
+            if isBusy {
+                ProgressView().controlSize(.small)
+            }
         }
+        .buttonStyle(.bordered)
+        .controlSize(.mini)
     }
 
     private func memoryText(_ gigabytes: Double?) -> String {
@@ -909,7 +964,15 @@ struct MenuView: View {
     }
 
     private var currentPickerSelection: Set<String> {
-        ModelCatalog.canonicalModelIDs(state.currentModels, availableIDs: pickerAvailableIDs)
+        let models: [String]
+        if let pickerTargetSerial, let daemon = state.machineTelemetry[pickerTargetSerial]?.state {
+            models = daemon.warmModels?.isEmpty == false
+                ? daemon.warmModels!
+                : [daemon.currentModel].compactMap { $0 }
+        } else {
+            models = state.currentModels
+        }
+        return ModelCatalog.canonicalModelIDs(models, availableIDs: pickerAvailableIDs)
     }
 
     private var pickerAvailableIDs: Set<String> {
@@ -919,21 +982,28 @@ struct MenuView: View {
     private var modelPicker: some View {
         ServingModelPickerView(
             intent: pickerIntent,
+            machineName: pickerTargetSerial.flatMap { serial in state.fleetRoster.first(where: { $0.serialNumber == serial })?.name },
             models: pickerModels,
-            physicalMemoryGB: state.physicalMemoryGB,
-            downloadedModels: state.downloadedModels,
+            physicalMemoryGB: pickerPhysicalMemoryGB,
+            downloadedModels: pickerTargetSerial == nil ? state.downloadedModels : Set(pickerModels.map(\.id)),
             selectedModels: $selectedModels,
             prewarmAfterRestart: prewarmAfterRestartBinding,
             cancel: {
                 withAnimation(.easeOut(duration: 0.18)) {
                     pickerOpen = false
                 }
+                pickerTargetSerial = nil
             },
             commit: { models, prewarm in
                 withAnimation(.easeOut(duration: 0.18)) {
                     pickerOpen = false
                 }
-                state.startServing(models: models, prewarm: prewarm)
+                if let pickerTargetSerial {
+                    state.startRemoteServing(serialNumber: pickerTargetSerial, models: models, prewarm: prewarm)
+                } else {
+                    state.startServing(models: models, prewarm: prewarm)
+                }
+                self.pickerTargetSerial = nil
             }
         )
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.86), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -951,30 +1021,40 @@ struct MenuView: View {
         }
     }
 
+    private var pickerPhysicalMemoryGB: Double {
+        guard let pickerTargetSerial,
+              let memoryGB = state.machineTelemetry[pickerTargetSerial]?.state?.capacity?.totalMemoryGb
+        else { return state.physicalMemoryGB }
+        return memoryGB
+    }
+
     private var footerControls: some View {
         HStack(spacing: 8) {
             if state.status == .stopped {
                 Button {
                     openServingPicker(.start)
                 } label: {
-                    Label("Start", systemImage: "play.fill")
+                    Image(systemName: "play.fill")
                 }
                 .buttonStyle(FloatingActionButtonStyle(tint: .green))
+                .help("Start this Mac")
                 .disabled(state.controlBusy)
             } else {
                 Button {
                     state.runControl("stop")
                 } label: {
-                    Label("Stop", systemImage: "stop.fill")
+                    Image(systemName: "stop.fill")
                 }
                 .buttonStyle(FloatingActionButtonStyle())
+                .help("Stop this Mac")
                 .disabled(state.controlBusy)
                 Button {
                     openServingPicker(.restart)
                 } label: {
-                    Label("Restart", systemImage: "arrow.clockwise")
+                    Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(FloatingActionButtonStyle())
+                .help("Choose models and restart this Mac")
                 .disabled(state.controlBusy)
             }
 
@@ -1060,8 +1140,11 @@ struct MenuView: View {
         return "darkbloom v\(version)"
     }
 
-    private func openServingPicker(_ intent: ServingPickerIntent) {
-        state.refreshModelSelection()
+    private func openServingPicker(_ intent: ServingPickerIntent, targetSerial: String? = nil) {
+        pickerTargetSerial = targetSerial
+        if targetSerial == nil {
+            state.refreshModelSelection()
+        }
         pickerIntent = intent
         let initialSelection = currentPickerSelection
         selectedModels = initialSelection
