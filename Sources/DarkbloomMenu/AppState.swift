@@ -43,6 +43,7 @@ final class AppState: ObservableObject {
     @Published var fleetPeriod: FleetPeriod = .day
     @Published var fleetSnapshot: FleetSnapshot?
     @Published var machineTelemetry: [String: MachineTelemetry] = [:]
+    @Published var lastCoordinatorRefresh: Date?
     @Published var catalog: [CoordinatorAPI.CatalogModel] = []
     @Published var currentModels: [String] = []
     @Published var downloadedModels: Set<String> = []
@@ -145,6 +146,13 @@ final class AppState: ObservableObject {
             Task { @MainActor in self?.refreshMachineTelemetry() }
         }
         machineTelemetryTimer?.tolerance = 3
+    }
+
+    func refreshAll() async {
+        refreshLocal()
+        refreshHardwareMetrics()
+        refreshMachineTelemetry()
+        await refreshRemote()
     }
 
     // MARK: - Local state (daemon-state.json)
@@ -274,6 +282,7 @@ final class AppState: ObservableObject {
             windows = EarningsMath.windows(acct.earnings)
             hourlyJobs = EarningsMath.hourlyBuckets(acct.earnings)
             fleet = Fleet.machines(connected: connected, earnings: acct.earnings, localSerial: localSerial)
+            lastCoordinatorRefresh = Date()
         } catch {
             remoteError = error.localizedDescription
             earnings = nil
@@ -283,6 +292,7 @@ final class AppState: ObservableObject {
             windows = EarningsWindows()
             hourlyJobs = []
             fleet = []
+            lastCoordinatorRefresh = Date()
         }
     }
 

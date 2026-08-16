@@ -97,6 +97,7 @@ struct MenuView: View {
         }
         .onAppear {
             expandedSections = preferences.snapshot.defaultExpandedSections(from: MenuSection.allCases)
+            Task { await state.refreshAll() }
         }
         .onChange(of: preferences.snapshot.sectionPresentations) { _, _ in
             expandedSections = preferences.snapshot.defaultExpandedSections(from: MenuSection.allCases)
@@ -984,6 +985,23 @@ struct MenuView: View {
             }
 
             Spacer()
+
+            Button {
+                Task { await state.refreshAll() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 28, height: 26)
+            }
+            .buttonStyle(.borderless)
+            .help("Refresh provider and coordinator data")
+
+            if let lastCoordinatorRefresh = state.lastCoordinatorRefresh {
+                Text("Updated \(Fmt.ago(lastCoordinatorRefresh))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
 
             if let versionText {
                 Text(versionText)

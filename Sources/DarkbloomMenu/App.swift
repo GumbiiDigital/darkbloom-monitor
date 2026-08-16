@@ -20,11 +20,6 @@ struct DarkbloomMenuApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Darkbloom Monitor") {
-            MenuView(state: state, preferences: preferences)
-        }
-        .defaultSize(width: 360, height: 680)
-
         MenuBarExtra {
             MenuView(state: state, preferences: preferences)
         } label: {
